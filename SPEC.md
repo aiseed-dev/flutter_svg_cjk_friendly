@@ -27,9 +27,17 @@ CjkSvgPicture.string(svg)   // SVG文字列を前処理してから flutter_svg 
 測定手段: matplotlib 製チャート (人口ピラミッド・CPI 等) + 手書きケースの
 golden テスト (headless。統計メモ帳の実資産を検証コーパスに使う)。
 
-候補 (計測中 → 確定したものだけ v0.1 に入れる):
-1. フォントフォールバック: font-family 不一致時に CJK グリフが豆腐/欠落
-   → 前処理で family を解決可能な名前に書換え or フォント登録ヘルパ
+**確定 #1 (2026-07-07 実測)**: flutter_svg は CSS の font-family リスト
+(`'BIZ UDGothic', 'Noto Sans CJK JP', ...` — matplotlib等が出す標準形) を
+パースせず、引用符・カンマ込みの文字列全体を1ファミリー名として扱う
+→ 何にもマッチせず全テキスト豆腐化。
+検証: 実チャートで再現 (statdb_app/test/render_pyramid.png=豆腐)、
+font-family を単一名に正規化すると完全な日本語描画
+(render_fixed.png=タイトル・年齢階級・凡例・出典まで完璧)。
+→ v0.1 の中核 = **font-family 正規化器** (リストをパースし、引用符除去、
+登録済み/指定のファミリーを選択)。
+
+候補 (未計測):
 2. text-anchor=middle/end の和文での位置ズレ (golden で判定)
 3. 縦書き (writing-mode: vertical-rl / tb) 非対応 → transform+1文字tspan分解で再現
 4. tspan の相対位置 (dx/dy) の和文メトリクス

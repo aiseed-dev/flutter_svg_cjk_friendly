@@ -29,9 +29,13 @@ CJK-specific gaps that Western content never exercises:
 2. **Vertical writing (`writing-mode: vertical-rl` / `tb`)** — a standard
    SVG 1.1/2 text feature that is essential for Japanese typography
    (tategaki) and currently ignored.
-3. **`text-anchor` / `tspan dx,dy` with full-width metrics** — anchor
-   positioning assumptions can drift with full-width CJK punctuation.
-   (We are preparing minimal reproductions.)
+3. **font-family lists are not parsed (confirmed, minimal repro available)**
+   — `font-family: 'BIZ UDGothic', 'Noto Sans CJK JP', sans-serif` (the
+   standard CSS form emitted by matplotlib and many tools) is treated as a
+   single literal family name including quotes and commas, so it never
+   matches a registered font and every glyph falls back (tofu for CJK).
+   Rewriting to a single unquoted name renders perfectly. This affects all
+   languages but CJK users cannot fall back to a Latin-only default.
 
 ## Proposal
 
