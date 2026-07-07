@@ -44,6 +44,21 @@ derived packages — the same idea as
 [markdown-cjk-friendly](https://github.com/tats-u/markdown-cjk-friendly).
 An upstream feature request draft lives in `docs/upstream-issue.md`.
 
+## Vertical writing
+
+flutter_svg ignores `writing-mode` and renders vertical text
+horizontally. This package expands vertical `<text>` elements into a
+stack of per-character plain `<text>` elements before rendering:
+
+- Brackets, long vowel marks and dashes are rotated 90°; full stops and
+  commas move to the top-right of their cell — a **font-independent**
+  approach that doesn't rely on vertical presentation form glyphs
+- Runs of 1–2 alphanumerics stay upright (tate-chū-yoko); longer runs
+  are rotated
+- Built into `cjkFriendlySvg` (standalone: `verticalTextSvg`)
+- Limitations: `<text>` with `<tspan>` children and writing-mode
+  inherited from a parent element are not handled
+
 ## License
 
 MIT (test fixture fonts: BIZ UD, SIL OFL — see test/fixtures/OFL.txt)

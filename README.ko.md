@@ -45,6 +45,21 @@ SvgPicture.string(cjkFriendlySvg(svg, preferred: ['BIZ UDGothic']));
 같은 발상입니다. 업스트림 기능 요청 초안은 `docs/upstream-issue.md`에
 있습니다.
 
+## 세로쓰기
+
+flutter_svg는 `writing-mode`를 무시하고 세로쓰기 텍스트를 가로로
+렌더링합니다. 이 패키지는 렌더링 전에 세로쓰기 `<text>`를
+「한 글자씩 세로로 쌓은 일반 `<text>` 그룹」으로 전개합니다:
+
+- 괄호·장음 기호·대시는 90° 회전, 구두점 (、。) 은 칸의 오른쪽
+  위로 이동 — 세로쓰기 전용 글리프에 의존하지 않는 **글꼴 독립**
+  방식
+- 1〜2자의 영숫자는 바로 세우고 (세로쓰기 안 가로쓰기), 3자
+  이상은 회전
+- `cjkFriendlySvg`에 내장 (단독 사용: `verticalTextSvg`)
+- 제한: `<tspan>`이 있는 텍스트와 부모 요소에서 상속된
+  writing-mode는 미지원
+
 ## 라이선스
 
 MIT (테스트용 글꼴: BIZ UD, SIL OFL — test/fixtures/OFL.txt 참조)

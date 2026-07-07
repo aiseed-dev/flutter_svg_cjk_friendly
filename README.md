@@ -43,6 +43,18 @@ SvgPicture.string(cjkFriendlySvg(svg, preferred: ['BIZ UDGothic']));
 パッケージで解く試み ([markdown-cjk-friendly](https://github.com/tats-u/markdown-cjk-friendly)
 と同じ発想)。上流への要望ドラフトは `docs/upstream-issue.md`。
 
+## 縦書き
+
+flutter_svg は `writing-mode` を無視して縦書きテキストを横書きに
+描画してしまう。本パッケージは描画前に、縦書き指定の `<text>` を
+「1文字ずつ縦に積んだ通常の `<text>` 群」へ展開する:
+
+- 括弧・長音・ダッシュは90°回転、句読点 (、。) はマス右上へ —
+  縦書き用字形グリフに頼らない**フォント非依存**の方式
+- 1〜2文字の英数字は縦中横で正立、3文字以上は回転
+- `cjkFriendlySvg` に組み込み済み (単体利用は `verticalTextSvg`)
+- 制限: `<tspan>` 入りと、親要素から継承した writing-mode は未対応
+
 ## ライセンス
 
 MIT (テスト用フォント: BIZ UD、SIL OFL — test/fixtures/OFL.txt)

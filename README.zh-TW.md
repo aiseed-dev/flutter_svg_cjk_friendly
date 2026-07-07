@@ -43,6 +43,18 @@ SvgPicture.string(cjkFriendlySvg(svg, preferred: ['BIZ UDGothic']));
 與 [markdown-cjk-friendly](https://github.com/tats-u/markdown-cjk-friendly)
 是同一種想法。給上游的功能請求草稿在 `docs/upstream-issue.md`。
 
+## 直排 (縱書)
+
+flutter_svg 會忽略 `writing-mode`，把直排文字算繪成橫排。
+本套件在算繪前把直排的 `<text>` 展開成「一字一個、縱向堆疊的
+一般 `<text>`」:
+
+- 括號、長音符、破折號旋轉 90°；句讀點 (、。) 移到格子右上 —
+  **不依賴字型**的做法，不需要縱排專用字形
+- 1〜2 個英數字直立 (直排內橫排)，3 個以上旋轉排列
+- 已內建於 `cjkFriendlySvg` (單獨使用: `verticalTextSvg`)
+- 限制: 含 `<tspan>` 的文字與從父元素繼承的 writing-mode 尚未支援
+
 ## 授權條款
 
 MIT (測試用字型: BIZ UD、SIL OFL — 見 test/fixtures/OFL.txt)
