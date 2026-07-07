@@ -59,6 +59,12 @@ flutter_svg 會忽略 `writing-mode`，把直排文字算繪成橫排。
 將來即使 flutter_svg 原生支援 writing-mode 也不會互相干擾
 (前處理後的 SVG 已不含 writing-mode)。
 
+## 本套件的退場
+
+當 flutter_svg 同時支援 font-family 清單解析與直排後，本套件就
+功成身退。衍生套件是上游跟上之前的橋——過了橋就不再需要橋。
+在那之前它獨立運作；退場後最終版本仍可照常使用。
+
 ## 授權條款
 
 MIT (測試用字型: BIZ UD、SIL OFL — 見 test/fixtures/OFL.txt)

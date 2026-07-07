@@ -64,6 +64,14 @@ flutter_svg support. If flutter_svg gains native writing-mode support
 in the future, the two won't conflict (preprocessed SVG carries no
 writing-mode left to handle).
 
+## End of life
+
+When flutter_svg adopts both font-family list resolution and vertical
+writing, this package will be retired. A derived package is a bridge
+until upstream catches up — a bridge is not needed once crossed. Until
+then it works standalone; after retirement the final version keeps
+working as-is.
+
 ## License
 
 MIT (test fixture fonts: BIZ UD, SIL OFL — see test/fixtures/OFL.txt)
