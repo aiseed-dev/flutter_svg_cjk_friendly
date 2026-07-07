@@ -59,6 +59,11 @@ stack of per-character plain `<text>` elements before rendering:
 - Limitations: `<text>` with `<tspan>` children and writing-mode
   inherited from a parent element are not handled
 
+This package is **self-sufficient** — it does not depend on upstream
+flutter_svg support. If flutter_svg gains native writing-mode support
+in the future, the two won't conflict (preprocessed SVG carries no
+writing-mode left to handle).
+
 ## License
 
 MIT (test fixture fonts: BIZ UD, SIL OFL — see test/fixtures/OFL.txt)

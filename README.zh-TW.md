@@ -55,6 +55,10 @@ flutter_svg 會忽略 `writing-mode`，把直排文字算繪成橫排。
 - 已內建於 `cjkFriendlySvg` (單獨使用: `verticalTextSvg`)
 - 限制: 含 `<tspan>` 的文字與從父元素繼承的 writing-mode 尚未支援
 
+本套件**獨立完備** — 不以上游 (flutter_svg 本體) 的支援為前提。
+將來即使 flutter_svg 原生支援 writing-mode 也不會互相干擾
+(前處理後的 SVG 已不含 writing-mode)。
+
 ## 授權條款
 
 MIT (測試用字型: BIZ UD、SIL OFL — 見 test/fixtures/OFL.txt)

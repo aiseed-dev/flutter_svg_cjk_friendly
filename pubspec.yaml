@@ -4,7 +4,7 @@ description: >-
   (which flutter_svg treats as a single literal name, causing tofu) so
   Japanese/Chinese/Korean SVG text renders with your bundled fonts.
 version: 0.2.0
-homepage: https://github.com/aiseed-dev/flutter-svg-cjk-friendly
+homepage: https://github.com/aiseed-dev/flutter_svg_cjk_friendly
 environment:
   sdk: ">=3.0.0 <4.0.0"
   flutter: ">=3.10.0"
