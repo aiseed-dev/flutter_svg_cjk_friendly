@@ -28,7 +28,11 @@ CJK-specific gaps that Western content never exercises:
    `TextStyle.fontFamilyFallback`) for SVG text would solve most real cases.
 2. **Vertical writing (`writing-mode: vertical-rl` / `tb`)** — a standard
    SVG 1.1/2 text feature that is essential for Japanese typography
-   (tategaki) and currently ignored.
+   (tategaki) and currently ignored. Concretely: the parser lists
+   `writing-mode` in `_heritableProps` (vector_graphics_compiler
+   `parser.dart`), so the property is tracked through the cascade, but the
+   text rendering path never reads it — vertical text is silently rendered
+   horizontally, with no warning.
 3. **font-family lists are not parsed (confirmed, minimal repro available)**
    — `font-family: 'BIZ UDGothic', 'Noto Sans CJK JP', sans-serif` (the
    standard CSS form emitted by matplotlib and many tools) is treated as a
@@ -42,9 +46,28 @@ CJK-specific gaps that Western content never exercises:
 Even partial support would help greatly, in this order of value:
 fallback chain for SVG text (1) > vertical writing-mode (2) > metrics (3).
 
-## Context
+## What we do today (and why it doesn't scale)
 
-We understand CJK text is unlikely to be a priority for most users; we are
-meanwhile building a small companion package that pre-processes SVGs on the
-Flutter side (in the spirit of markdown-cjk-friendly). Happy to share test
-corpora (real-world Japanese statistical charts) if useful.
+We ship a small companion package
+([flutter_svg_cjk_friendly](https://github.com/aiseed-dev/flutter_svg_cjk_friendly))
+that pre-processes the SVG string before it reaches flutter_svg:
+
+- (3) is fixed by normalizing every `font-family` list to one resolvable
+  name — cheap and robust.
+- (2) is *emulated* by decomposing each vertical `<text>` into a stack of
+  per-character `<text>` elements: brackets/dashes rotated 90°, full
+  stops/commas moved to the top-right of their cell, 1–2 digit runs kept
+  upright (tate-chū-yoko). It renders correctly (we keep a rendered-PNG
+  regression test), but it is clearly the wrong layer:
+  - a paragraph becomes N text elements (parse + layout cost × N),
+  - `<tspan>`, inherited writing-mode, bidi and precise font metrics
+    cannot be handled correctly from string preprocessing,
+  - every consumer pays the preprocessing cost at runtime.
+
+Proper support belongs in the renderer's text handling, where the font
+metrics and paragraph builder already live. We understand CJK text may not
+be a priority for most users, but vertical writing is table stakes for
+Japanese content (novels, official documents, education), and right now
+the property is accepted by the parser and silently dropped. Happy to
+share test corpora (real-world Japanese statistical charts and vertical
+text fixtures) or help with the implementation if there is interest.
