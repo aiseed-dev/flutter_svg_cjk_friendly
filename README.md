@@ -1,39 +1,48 @@
 # flutter_svg_cjk_friendly
 
-Make [flutter_svg](https://pub.dev/packages/flutter_svg) friendly to
-Japanese / Chinese / Korean text.
+日本語 | [English](README.en.md) | [简体中文](README.zh.md) | [한국어](README.ko.md)
 
-## The problem
+[flutter_svg](https://pub.dev/packages/flutter_svg) を
+日本語・中国語・韓国語 (CJK) フレンドリーにする。
 
-flutter_svg treats a CSS font-family **list** —
+## 問題
+
+flutter_svg は CSS の font-family **リスト** —
 `font-family: 'BIZ UDGothic', 'Noto Sans CJK JP', sans-serif`
-(the standard form emitted by matplotlib and most tools) — as a **single
-literal family name**, quotes and commas included. It never matches a real
-font, so every glyph falls back; CJK text renders as tofu.
+(matplotlib はじめ多くのツールが出力する標準形) — を、引用符もカンマも
+含めた**単一のフォント名**として扱う。実在のフォントに一致しないため
+全グリフがフォールバックし、CJK テキストは豆腐 (□) になる。
 
-## The fix
+## 解決
+
+```yaml
+# pubspec.yaml (pub.dev 公開までは git 参照で)
+dependencies:
+  flutter_svg_cjk_friendly:
+    git: https://github.com/aiseed-dev/flutter_svg_cjk_friendly.git
+```
 
 ```dart
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_svg_cjk_friendly/flutter_svg_cjk_friendly.dart';
 
 SvgPicture.string(cjkFriendlySvg(svg));
-// prefer a font you bundled in pubspec:
+// pubspec で同梱したフォントを優先させる場合:
 SvgPicture.string(cjkFriendlySvg(svg, preferred: ['BIZ UDGothic']));
 ```
 
-`cjkFriendlySvg` parses every `font-family` (attribute and `style:` form),
-unquotes it, skips generic families, and picks your preferred family when
-present. Nothing else in the SVG is touched.
+`cjkFriendlySvg` は全ての `font-family` (属性形式と style 形式の両方) を
+パースし、引用符を外し、総称ファミリを飛ばし、`preferred` にある
+フォントがリストに含まれていればそれを選ぶ。SVG の他の部分には触れない。
 
-Verified with real-world Japanese statistical charts (population pyramids
-from ecitizen.jp): before = tofu, after = perfect BIZ UD rendering. The
-regression test in `test/render_test.dart` locks this in.
+実在の日本語統計チャート (ecitizen.jp の人口ピラミッド) で検証済み:
+適用前 = 豆腐、適用後 = BIZ UD で完全描画。`test/render_test.dart` の
+回帰テストでこの結果を固定している。
 
-Companion of [markdown-cjk-friendly ecosystem] — CJK gaps that upstream
-maintainers can't prioritize, solved as small derived packages.
-An upstream feature request draft lives in `docs/upstream-issue.md`.
+本家 (flutter/packages) が優先しにくい CJK 固有の問題を、小さな派生
+パッケージで解く試み ([markdown-cjk-friendly](https://github.com/tats-u/markdown-cjk-friendly)
+と同じ発想)。上流への要望ドラフトは `docs/upstream-issue.md`。
 
-## License
+## ライセンス
 
-MIT (test fixture fonts: BIZ UD, SIL OFL — see test/fixtures/OFL.txt)
+MIT (テスト用フォント: BIZ UD、SIL OFL — test/fixtures/OFL.txt)
