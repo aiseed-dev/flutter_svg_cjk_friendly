@@ -1,6 +1,6 @@
 # flutter_svg_cjk_friendly
 
-[日本語](README.md) | [English](README.en.md) | [简体中文](README.zh.md) | 한국어
+[日本語](README.md) | [English](README.en.md) | [繁體中文](README.zh-TW.md) | 한국어
 
 [flutter_svg](https://pub.dev/packages/flutter_svg)를
 한국어·일본어·중국어 (CJK) 텍스트에 친화적으로 만듭니다.
