@@ -1,0 +1,557 @@
+From a4ca8cf51453ecfadfedfe486c5577875137a269 Mon Sep 17 00:00:00 2001
+From: Yasuhiro Niji <niji@yniji.net>
+Date: Wed, 8 Jul 2026 08:00:07 +0900
+Subject: [PATCH] [vector_graphics_compiler] Support SVG vertical writing modes
+ (CJK tategaki)
+
+flutter_svg silently renders vertical (writing-mode) text horizontally:
+the parser tracks writing-mode through the attribute cascade
+(_heritableProps) but the text path never reads it. Flutter's paragraph
+builder has no vertical layout, so this change decomposes vertical text
+at compile time in the resolver into per-cell horizontal text draws,
+using only existing IR primitives (no codec/runtime changes):
+
+- upright glyphs stacked along the block axis
+- rotational vertical forms (brackets, dashes, long sound mark) rotated
+  90 degrees; ideographic full stop/comma moved to the cell's top-right
+  corner (font-independent: no reliance on U+FE10..FE4F glyph coverage)
+- tate-chu-yoko: 1-2 char ASCII alphanumeric runs stay upright
+- tspan attribute cascade and absolute positioning (new column)
+  supported; dx/dy falls back to horizontal rendering
+
+Adds 10 tests; all 339 package tests pass.
+---
+ .../vector_graphics_compiler/CHANGELOG.md     |  12 ++
+ .../lib/src/svg/resolver.dart                 | 159 ++++++++++++++++++
+ .../lib/src/svg/vertical_text.dart            | 128 ++++++++++++++
+ .../vector_graphics_compiler/pubspec.yaml     |   2 +-
+ .../test/vertical_text_test.dart              | 151 +++++++++++++++++
+ 5 files changed, 451 insertions(+), 1 deletion(-)
+ create mode 100644 packages/vector_graphics_compiler/lib/src/svg/vertical_text.dart
+ create mode 100644 packages/vector_graphics_compiler/test/vertical_text_test.dart
+
+diff --git a/packages/vector_graphics_compiler/CHANGELOG.md b/packages/vector_graphics_compiler/CHANGELOG.md
+index 578be67..3d9f207 100644
+--- a/packages/vector_graphics_compiler/CHANGELOG.md
++++ b/packages/vector_graphics_compiler/CHANGELOG.md
+@@ -1,3 +1,15 @@
++## 1.3.0
++
++* Adds support for SVG vertical writing modes (`writing-mode: vertical-rl` /
++  `vertical-lr` / `tb` / `tb-rl`), used primarily by CJK text. Vertical text
++  is decomposed at compile time into per-cell horizontal text draws: upright
++  glyphs are stacked along the block axis, characters whose vertical form is
++  a rotation (brackets, dashes, the long sound mark) are rotated 90°,
++  ideographic full stops/commas move to the top-right corner of their cell,
++  and runs of one or two ASCII alphanumerics stay upright (tate-chū-yoko).
++  `tspan` attribute cascading and absolute positioning (new column) are
++  supported; `dx`/`dy` fall back to the previous horizontal behavior.
++
+ ## 1.2.6
+ 
+ * Fixes `linux-arm64` host support by selecting the Flutter engine
+diff --git a/packages/vector_graphics_compiler/lib/src/svg/resolver.dart b/packages/vector_graphics_compiler/lib/src/svg/resolver.dart
+index 09c96d2..ace5011 100644
+--- a/packages/vector_graphics_compiler/lib/src/svg/resolver.dart
++++ b/packages/vector_graphics_compiler/lib/src/svg/resolver.dart
+@@ -2,6 +2,7 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
++import 'dart:math' as math;
+ import 'dart:typed_data';
+ import '../geometry/basic_types.dart';
+ import '../geometry/matrix.dart';
+@@ -12,6 +13,7 @@ import '../paint.dart';
+ import 'constants.dart';
+ import 'node.dart';
+ import 'parser.dart';
++import 'vertical_text.dart';
+ import 'visitor.dart';
+ 
+ /// A visitor class that processes relative coordinates in the tree into a
+@@ -131,6 +133,12 @@ class ResolvingVisitor extends Visitor<Node, AffineMatrix> {
+ 
+   @override
+   Node visitTextPositionNode(TextPositionNode textPositionNode, AffineMatrix data) {
++    if (isVerticalWritingMode(textPositionNode.attributes.raw['writing-mode'])) {
++      final Node? vertical = _resolveVerticalText(textPositionNode, data);
++      if (vertical != null) {
++        return vertical;
++      }
++    }
+     final AffineMatrix nextTransform = textPositionNode.concatTransform(data);
+ 
+     return ResolvedTextPositionNode(textPositionNode.computeTextPosition(_bounds, data), <Node>[
+@@ -139,6 +147,148 @@ class ResolvingVisitor extends Visitor<Node, AffineMatrix> {
+     ]);
+   }
+ 
++  /// Resolves a text element in a vertical writing mode into a stack of
++  /// per-cell horizontal text draws (see `vertical_text.dart`).
++  ///
++  /// Flutter's paragraph layout has no vertical text support, so vertical
++  /// text is decomposed at compile time: upright glyphs are stacked along
++  /// the block axis, characters whose vertical form is a rotation are
++  /// rotated 90°, and ideographic full stops/commas move to the top-right
++  /// corner of their cell.
++  ///
++  /// Returns null when the subtree uses relative positioning (`dx`/`dy`),
++  /// which this pass does not support, so the caller can fall back to the
++  /// standard horizontal path.
++  Node? _resolveVerticalText(TextPositionNode textPositionNode, AffineMatrix data) {
++    final TextPosition position = textPositionNode.computeTextPosition(_bounds, data);
++    final double? x = position.x;
++    final double? y = position.y;
++    if (x == null || y == null) {
++      return null;
++    }
++
++    // Collect text runs in document order, grouped into columns. A nested
++    // text position element (`<tspan>`) with an absolute x and/or y starts
++    // a new column, matching the SVG semantics of absolute positioning.
++    final columns = <_VerticalTextColumn>[_VerticalTextColumn(x, y)];
++    var unsupported = false;
++    void collect(Node node) {
++      if (unsupported) {
++        return;
++      }
++      if (node is TextNode) {
++        columns.last.runs.add(node);
++      } else if (node is TextPositionNode) {
++        if (node.attributes.dx != null || node.attributes.dy != null) {
++          unsupported = true;
++          return;
++        }
++        if (node.attributes.x != null || node.attributes.y != null) {
++          columns.add(
++            _VerticalTextColumn(
++              node.attributes.x?.calculate(_bounds.width) ?? columns.last.x,
++              node.attributes.y?.calculate(_bounds.height) ?? columns.last.y,
++            ),
++          );
++        }
++        for (final Node child in node.children) {
++          collect(child is AttributedNode ? child.applyAttributes(node.attributes) : child);
++        }
++      } else {
++        unsupported = true;
++      }
++    }
++
++    for (final Node child in textPositionNode.children) {
++      collect(
++        child is AttributedNode ? child.applyAttributes(textPositionNode.attributes) : child,
++      );
++    }
++    if (unsupported || columns.every((_VerticalTextColumn c) => c.runs.isEmpty)) {
++      return null;
++    }
++
++    final children = <Node>[];
++    for (final column in columns) {
++      _resolveVerticalColumn(column, position.transform, data, children);
++    }
++    if (children.isEmpty) {
++      return Node.empty;
++    }
++    return ResolvedTextPositionNode(const TextPosition(reset: true), children);
++  }
++
++  void _resolveVerticalColumn(
++    _VerticalTextColumn column,
++    AffineMatrix? baseTransform,
++    AffineMatrix data,
++    List<Node> children,
++  ) {
++    if (column.runs.isEmpty) {
++      return;
++    }
++    final double x = column.x;
++    final runCells = <List<VerticalTextCell>>[
++      for (final TextNode run in column.runs) verticalTextCells(run.text),
++    ];
++    var totalExtent = 0.0;
++    for (var i = 0; i < column.runs.length; i++) {
++      final double fontSize = column.runs[i].attributes.fontSize ?? 16;
++      for (final VerticalTextCell cell in runCells[i]) {
++        totalExtent += cell.advance * fontSize;
++      }
++    }
++
++    final double anchorMultiplier = column.runs.first.attributes.textAnchorMultiplier ?? 0;
++    double cellTop = column.y - totalExtent * anchorMultiplier;
++
++    for (var i = 0; i < column.runs.length; i++) {
++      final TextNode run = column.runs[i];
++      final double fontSize = run.attributes.fontSize ?? 16;
++      final Paint? paint = run.computePaint(_bounds, data);
++      for (final VerticalTextCell cell in runCells[i]) {
++        final double extent = cell.advance * fontSize;
++        final String? cellText = cell.text;
++        if (cellText != null && cellText.trim().isNotEmpty && paint != null) {
++          var cellX = x;
++          final double baselineY;
++          var transform = baseTransform;
++          if (cell.rotated) {
++            final double centerY = cellTop + extent / 2;
++            baselineY = centerY + rotatedCellBaselineShift * fontSize;
++            final AffineMatrix rotation = AffineMatrix.identity
++                .translated(x, centerY)
++                .rotated(math.pi / 2)
++                .translated(-x, -centerY);
++            transform = transform == null ? rotation : transform.multiplied(rotation);
++          } else if (cell.corner) {
++            cellX = x + cornerCellDx * fontSize;
++            baselineY = cellTop + cornerCellDy * fontSize;
++          } else {
++            baselineY = cellTop + verticalCellBaseline * fontSize;
++          }
++          final config = TextConfig(
++            cellText,
++            0.5,
++            run.attributes.fontFamily,
++            run.attributes.fontWeight ?? normalFontWeight,
++            fontSize,
++            run.attributes.textDecoration ?? TextDecoration.none,
++            run.attributes.textDecorationStyle ?? TextDecorationStyle.solid,
++            run.attributes.textDecorationColor ?? Color.opaqueBlack,
++          );
++          children.add(
++            ResolvedTextPositionNode(
++              TextPosition(x: cellX, y: baselineY, reset: true, transform: transform),
++              <Node>[ResolvedTextNode(textConfig: config, paint: paint)],
++            ),
++          );
++        }
++        cellTop += extent;
++      }
++    }
++  }
++
+   @override
+   Node visitTextNode(TextNode textNode, AffineMatrix data) {
+     final Paint? paint = textNode.computePaint(_bounds, data);
+@@ -342,6 +492,15 @@ class ResolvedTextPositionNode extends Node {
+   }
+ }
+ 
++/// One column of vertical (writing-mode) text being resolved.
++class _VerticalTextColumn {
++  _VerticalTextColumn(this.x, this.y);
++
++  final double x;
++  final double y;
++  final List<TextNode> runs = <TextNode>[];
++}
++
+ /// A block of text that has its position and final transfrom fully known.
+ ///
+ /// This should only be constructed from a [TextNode] in a [ResolvingVisitor].
+diff --git a/packages/vector_graphics_compiler/lib/src/svg/vertical_text.dart b/packages/vector_graphics_compiler/lib/src/svg/vertical_text.dart
+new file mode 100644
+index 0000000..92ffec8
+--- /dev/null
++++ b/packages/vector_graphics_compiler/lib/src/svg/vertical_text.dart
+@@ -0,0 +1,128 @@
++// Copyright 2013 The Flutter Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++/// Layout support for SVG vertical writing modes (`writing-mode:
++/// vertical-rl` / `vertical-lr` / `tb` / `tb-rl`), used primarily by
++/// East Asian (CJK) text.
++///
++/// Flutter's paragraph builder has no vertical text layout, so vertical
++/// text is decomposed at compile time into per-cell horizontal text draws:
++/// upright characters are stacked along the block axis, characters whose
++/// vertical form is a rotation (brackets, dashes, the long sound mark) are
++/// rotated 90°, and full stops/commas are moved to the top-right corner of
++/// their cell. Runs of one or two ASCII alphanumerics stay upright
++/// (tate-chū-yoko); longer runs are rotated as a unit.
++///
++/// This is deliberately font-independent: it does not rely on the font
++/// providing Unicode vertical presentation forms (U+FE10..FE4F), which many
++/// fonts lack.
++library;
++
++/// Whether [value] (a raw `writing-mode` property value) selects a vertical
++/// writing mode.
++bool isVerticalWritingMode(String? value) {
++  if (value == null) {
++    return false;
++  }
++  return value.startsWith('vertical') || value.startsWith('tb');
++}
++
++// Characters whose vertical form is the horizontal glyph rotated 90°
++// (long sound mark, wave/em dashes, leaders, brackets, colon/semicolon).
++const Set<String> _rotatedChars = <String>{
++  'ー', '〜', '～', '−', '－', '＝', '…', '‥', '—', '–',
++  '「', '」', '『', '』', '(', ')', '（', '）',
++  '{', '}', '｛', '｝', '〔', '〕', '【', '】',
++  '《', '》', '〈', '〉', '[', ']', '［', '］',
++  '：', '；',
++};
++
++// Ideographic full stop / comma sit in the top-right corner of their cell
++// in vertical writing.
++const Set<String> _cornerChars = <String>{'、', '。', '，'};
++
++bool _isAsciiAlnum(int codeUnit) {
++  return (codeUnit >= 0x30 && codeUnit <= 0x39) ||
++      (codeUnit >= 0x41 && codeUnit <= 0x5A) ||
++      (codeUnit >= 0x61 && codeUnit <= 0x7A);
++}
++
++/// One cell of a vertical text column.
++class VerticalTextCell {
++  /// See [VerticalTextCell].
++  const VerticalTextCell(
++    this.text,
++    this.advance, {
++    this.rotated = false,
++    this.corner = false,
++  });
++
++  /// The text drawn in this cell, or null for a whitespace gap.
++  final String? text;
++
++  /// The block-axis advance of this cell in em units.
++  final double advance;
++
++  /// Whether the cell is drawn rotated 90° clockwise.
++  final bool rotated;
++
++  /// Whether the cell content is moved to the top-right corner
++  /// (ideographic full stop / comma).
++  final bool corner;
++}
++
++/// Splits [text] into vertical layout cells.
++List<VerticalTextCell> verticalTextCells(String text) {
++  final cells = <VerticalTextCell>[];
++  final List<String> chars = text.split('');
++  var i = 0;
++  while (i < chars.length) {
++    final String c = chars[i];
++    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
++      cells.add(const VerticalTextCell(null, 0.5));
++      i++;
++    } else if (c == '　') {
++      cells.add(const VerticalTextCell(null, 1));
++      i++;
++    } else if (_isAsciiAlnum(c.codeUnitAt(0))) {
++      var j = i;
++      while (j < chars.length && _isAsciiAlnum(chars[j].codeUnitAt(0))) {
++        j++;
++      }
++      final String run = text.substring(i, j);
++      if (run.length <= 2) {
++        // Tate-chū-yoko: short alphanumeric runs stay upright in one cell.
++        cells.add(VerticalTextCell(run, 1));
++      } else {
++        cells.add(VerticalTextCell(run, 0.6 * run.length, rotated: true));
++      }
++      i = j;
++    } else if (_rotatedChars.contains(c)) {
++      cells.add(VerticalTextCell(c, 1, rotated: true));
++      i++;
++    } else if (_cornerChars.contains(c)) {
++      cells.add(VerticalTextCell(c, 1, corner: true));
++      i++;
++    } else {
++      cells.add(VerticalTextCell(c, 1));
++      i++;
++    }
++  }
++  return cells;
++}
++
++/// The alphabetic-baseline position of an upright cell, as a fraction of
++/// the font size from the cell top (typical CJK ascent).
++const double verticalCellBaseline = 0.88;
++
++/// Baseline correction for rotated cells so the glyph center coincides with
++/// the cell center after rotation.
++const double rotatedCellBaselineShift = 0.36;
++
++/// Offsets (x, y) of a corner cell's baseline from the cell's top-left, as
++/// fractions of the font size.
++const double cornerCellDx = 0.55;
++
++/// See [cornerCellDx].
++const double cornerCellDy = 0.38;
+diff --git a/packages/vector_graphics_compiler/pubspec.yaml b/packages/vector_graphics_compiler/pubspec.yaml
+index db216b0..d841e67 100644
+--- a/packages/vector_graphics_compiler/pubspec.yaml
++++ b/packages/vector_graphics_compiler/pubspec.yaml
+@@ -2,7 +2,7 @@ name: vector_graphics_compiler
+ description: A compiler to convert SVGs to the binary format used by `package:vector_graphics`.
+ repository: https://github.com/flutter/packages/tree/main/packages/vector_graphics_compiler
+ issue_tracker: https://github.com/flutter/flutter/issues?q=is%3Aissue+is%3Aopen+label%3A%22p%3A+vector_graphics%22
+-version: 1.2.6
++version: 1.3.0
+ 
+ executables:
+   vector_graphics_compiler:
+diff --git a/packages/vector_graphics_compiler/test/vertical_text_test.dart b/packages/vector_graphics_compiler/test/vertical_text_test.dart
+new file mode 100644
+index 0000000..8f5c2c8
+--- /dev/null
++++ b/packages/vector_graphics_compiler/test/vertical_text_test.dart
+@@ -0,0 +1,151 @@
++// Copyright 2013 The Flutter Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++import 'package:test/test.dart';
++import 'package:vector_graphics_compiler/vector_graphics_compiler.dart';
++
++void main() {
++  test('vertical writing-mode stacks characters along the block axis', () {
++    const svg = '''
++<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
++<text x="100" y="20" font-size="10" writing-mode="vertical-rl">日本語</text>
++</svg>''';
++
++    final VectorInstructions instructions = parseWithoutOptimizers(svg);
++
++    expect(instructions.text.map((TextConfig t) => t.text), <String>['日', '本', '語']);
++    // Each cell is centered on the column axis.
++    expect(instructions.text.map((TextConfig t) => t.xAnchorMultiplier), everyElement(0.5));
++    final List<TextPosition> positions = instructions.textPositions
++        .where((TextPosition p) => p.x != null)
++        .toList();
++    expect(positions.map((TextPosition p) => p.x), everyElement(100));
++    // Baseline of each 1em cell sits at cellTop + 0.88em.
++    expect(positions.map((TextPosition p) => p.y), <double>[28.8, 38.8, 48.8]);
++  });
++
++  test('writing-mode via style and tb value also triggers vertical layout', () {
++    const svg = '''
++<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
++<text x="10" y="10" font-size="10" style="writing-mode: tb;">縦書</text>
++</svg>''';
++
++    final VectorInstructions instructions = parseWithoutOptimizers(svg);
++    expect(instructions.text.map((TextConfig t) => t.text), <String>['縦', '書']);
++  });
++
++  test('rotated characters get a rotation transform', () {
++    const svg = '''
++<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
++<text x="50" y="10" font-size="10" writing-mode="vertical-rl">あー</text>
++</svg>''';
++
++    final VectorInstructions instructions = parseWithoutOptimizers(svg);
++    expect(instructions.text.map((TextConfig t) => t.text), <String>['あ', 'ー']);
++    final List<TextPosition> positions = instructions.textPositions
++        .where((TextPosition p) => p.x != null)
++        .toList();
++    expect(positions[0].transform, isNull);
++    expect(positions[1].transform, isNotNull);
++  });
++
++  test('ideographic full stop moves to the top-right corner of its cell', () {
++    const svg = '''
++<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
++<text x="50" y="10" font-size="10" writing-mode="vertical-rl">あ。</text>
++</svg>''';
++
++    final VectorInstructions instructions = parseWithoutOptimizers(svg);
++    final List<TextPosition> positions = instructions.textPositions
++        .where((TextPosition p) => p.x != null)
++        .toList();
++    expect(positions[0].x, 50);
++    expect(positions[1].x, 55.5); // 50 + 0.55em
++    expect(positions[1].y, closeTo(23.8, 0.001)); // cellTop 20 + 0.38em
++  });
++
++  test('short alphanumeric runs stay upright (tate-chu-yoko)', () {
++    const svg = '''
++<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
++<text x="50" y="10" font-size="10" writing-mode="vertical-rl">第12回ABC</text>
++</svg>''';
++
++    final VectorInstructions instructions = parseWithoutOptimizers(svg);
++    expect(instructions.text.map((TextConfig t) => t.text), <String>['第', '12', '回', 'ABC']);
++    final List<TextPosition> positions = instructions.textPositions
++        .where((TextPosition p) => p.x != null)
++        .toList();
++    expect(positions[1].transform, isNull); // 12 upright in one cell
++    expect(positions[3].transform, isNotNull); // ABC rotated
++  });
++
++  test('text-anchor middle centers the column on the y coordinate', () {
++    const svg = '''
++<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
++<text x="50" y="50" font-size="10" text-anchor="middle" writing-mode="vertical-rl">あい</text>
++</svg>''';
++
++    final VectorInstructions instructions = parseWithoutOptimizers(svg);
++    final List<TextPosition> positions = instructions.textPositions
++        .where((TextPosition p) => p.x != null)
++        .toList();
++    // Total extent 20; column top = 50 - 10 = 40.
++    expect(positions.map((TextPosition p) => p.y), <double>[48.8, 58.8]);
++  });
++
++  test('tspan attributes cascade into vertical cells', () {
++    const svg = '''
++<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
++<text x="50" y="10" font-size="10" writing-mode="vertical-rl">あ<tspan font-size="20">い</tspan></text>
++</svg>''';
++
++    final VectorInstructions instructions = parseWithoutOptimizers(svg);
++    expect(instructions.text.map((TextConfig t) => t.text), <String>['あ', 'い']);
++    expect(instructions.text[0].fontSize, 10);
++    expect(instructions.text[1].fontSize, 20);
++    final List<TextPosition> positions = instructions.textPositions
++        .where((TextPosition p) => p.x != null)
++        .toList();
++    // Second cell starts after the first 1em (10px) cell.
++    expect(positions[1].y, closeTo(10 + 10 + 0.88 * 20, 0.001));
++  });
++
++  test('tspan with absolute position starts a new column', () {
++    const svg = '''
++<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
++<text x="50" y="10" font-size="10" writing-mode="vertical-rl">あ<tspan x="30" y="20">い</tspan></text>
++</svg>''';
++
++    final VectorInstructions instructions = parseWithoutOptimizers(svg);
++    expect(instructions.text.map((TextConfig t) => t.text), <String>['あ', 'い']);
++    final List<TextPosition> positions = instructions.textPositions
++        .where((TextPosition p) => p.x != null)
++        .toList();
++    expect(positions[0].x, 50);
++    expect(positions[0].y, closeTo(18.8, 0.001)); // column 1 top = 10
++    expect(positions[1].x, 30);
++    expect(positions[1].y, closeTo(28.8, 0.001)); // column 2 top = 20
++  });
++
++  test('relative positioning (dx/dy) falls back to horizontal layout', () {
++    const svg = '''
++<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
++<text x="50" y="10" writing-mode="vertical-rl">あ<tspan dx="5">い</tspan></text>
++</svg>''';
++
++    final VectorInstructions instructions = parseWithoutOptimizers(svg);
++    // Not decomposed: the runs stay whole.
++    expect(instructions.text.map((TextConfig t) => t.text), <String>['あ', 'い']);
++  });
++
++  test('horizontal text is unaffected', () {
++    const svg = '''
++<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
++<text x="50" y="10" font-size="10">日本語</text>
++</svg>''';
++
++    final VectorInstructions instructions = parseWithoutOptimizers(svg);
++    expect(instructions.text.map((TextConfig t) => t.text), <String>['日本語']);
++  });
++}
+-- 
+2.43.0
+
